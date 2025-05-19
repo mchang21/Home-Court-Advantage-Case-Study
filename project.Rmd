@@ -1,0 +1,468 @@
+---
+title: 'Final Project  - Does "Home Court Advantage" Exist in the NBA'
+author: "Underwater Basket Knitters - Adrian Castaneda, Garvin Mo Zhen, Melvin Chang"
+output: html_document
+---
+
+## Introduction
+
+In this project, we seek to analyze whether having the home court will give the home team an advantage in the NBA. This final is largely inspired by other articles analyzing
+home-field advantage in the NFL in 2018 and over the pandemic. 
+
+It is more unclear as to why there may appear to be a home-field advantage in the NFL, but an intuitive estimate is that advantages stem from not being able to hear the snap count
+due to the effect of crowd noise on players (Hermsmeyer). According to Hermsmeyer, this disadvantage may amount to being less effective at rushing, and based on his analysis
+of rushing yards, road teams average 4.27 yards whereas home teams average 4.37 yards per rush which emphasizes this hypothesis that crowd noise plays a role in home field advantage.
+However, it is not clear whether crowd noise is a significant factor in causing home-field advantage. Given the information above, one would also expect road teams to draw more 
+false start penalties; however, this assumption is false with false start penalties being called on 1.4% of home team plays and 1.34% of away team plays (Hermsmeyer). Other
+potential contributors to advantages that has been examined is the strain of the travel, game officials, and stadium altitude. 
+
+Yet over the pandemic and even after the pandemic, we see home teams struggle to be able to utilize this apparent leverage with road teams winning 63-56, a 52.9% win percentage (Schalter). 
+This is a tremendous difference for home teams compared to previous seasons considering the impact the pandemic has had in preventing fans from being able to attend games in 
+person. Obviously, there is some factor which plays a role in giving home-field teams an advantage over road teams, and we want to analyze how this translates in other sports.
+
+Sources:
+
+https://fivethirtyeight.com/features/the-nfls-home-field-advantage-is-real-but-why/
+
+https://fivethirtyeight.com/features/fans-are-back-at-nfl-games-but-home-field-advantage-isnt-yet/
+
+### Load packages
+
+```{r load-packages, message=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(broom)
+library(plm)
+```
+
+## Question
+
+Does a NBA team playing at home have an advantage?
+
+## The Data
+
+The data we are using is sourced from kaggle where the data is collected from the official NBA stats website by user Nathan Lauga. 
+The data consists of all NBA games ranging from 2004 - Nov. 2021. 
+The two datasets we are using are games.csv and teams.csv. Out of the entire dataset, we are using data between the years 2009 and 2018.
+
+Source: https://www.kaggle.com/nathanlauga/nba-games?select=games.csv 
+
+### Data Import
+
+```{r, message=FALSE}
+# Load data
+games <- read_csv("data/games.csv") 
+team_ids <- read_csv("data/teams.csv")
+```
+
+### Data Wrangling
+
+In order to test whether NBA teams playing at home have an advantage, we need to wrangle our data in a way that lets us analyze the home team vs the away team's statistics in a way that's easy to understand. Luckily, our raw data set is in a decent shape, but there still is some edits to do. We started by creating 4 new data sets using the `teams` data set in order to add home and away team nickname and abbreviations to the `games` data set. 
+```{r, message = FALSE}
+# Create home team abbreviation data set
+teams_abb_h <- team_ids |>
+  select(TEAM_ID, ABBREVIATION) |> # Select desired columns
+  # Rename columns to match games data set
+  rename(HOME_TEAM_ID = "TEAM_ID", 
+         HOME_TEAM_ABB = "ABBREVIATION")
+
+# Create visitor team abbreviation data set
+teams_abb_v <- team_ids |>
+  select(TEAM_ID, ABBREVIATION) |> # Select desired columns
+  # Rename columns to match games data set
+  rename(VISITOR_TEAM_ID = "TEAM_ID", 
+         VISITOR_TEAM_ABB = "ABBREVIATION")
+
+# Create home team nickname data set
+teams_nick_h <- team_ids |>
+  select(TEAM_ID, NICKNAME) |> # Select desired columns
+  # Rename columns to match games data set
+  rename(HOME_TEAM_ID = "TEAM_ID", 
+         HOME_TEAM_NICKNAME = "NICKNAME")
+
+# Create visitor team nickname data set
+teams_nick_v <- team_ids |>
+  select(TEAM_ID, NICKNAME) |> # Select desired columns
+  # Rename columns to match games data set
+  rename(VISITOR_TEAM_ID = "TEAM_ID", 
+         VISITOR_TEAM_NICKNAME = "NICKNAME")
+
+# Combine four above data sets with games data set
+games <- games |>
+  inner_join(teams_abb_h) |>
+  inner_join(teams_abb_v) |>
+  inner_join(teams_nick_h) |>
+  inner_join(teams_nick_v)
+```
+
+Now that we have combined our data, we want to remove unnecessary columns, which are either incorporated into the new columns we added or are not useful for our analysis.
+```{r}
+games <- games |>
+  select(-GAME_DATE_EST, -GAME_ID, -GAME_STATUS_TEXT, -HOME_TEAM_ID, -VISITOR_TEAM_ID, -TEAM_ID_home, -TEAM_ID_away)
+```
+
+Currently our data's observations is individual games. To carry out our analysis on a team's performance, we need to split our observations into the home and away team. We did this by extracting the corresponding information from the `games` data set and then recombining the data in the `teams` data set where each observation is a team. Note: there are double the observation in `teams` because there are two teams per game.
+```{r}
+# Extract home team's data from games data set
+teams_home <- games |>
+  # Select columns corresponding to home team
+  select(SEASON, PTS_home, FG_PCT_home, FG3_PCT_home, FT_PCT_home, AST_home, REB_home, HOME_TEAM_ABB, HOME_TEAM_NICKNAME, HOME_TEAM_WINS) |>
+  # Rename columns to remove home aspect
+  rename(PTS = "PTS_home",
+         FG_PCT = "FG_PCT_home",
+         FG3_PCT = "FG3_PCT_home",
+         FT_PCT = "FT_PCT_home",
+         AST = "AST_home",
+         REB = "REB_home",
+         ABBREVIATION = "HOME_TEAM_ABB",
+         NICKNAME = "HOME_TEAM_NICKNAME") |>
+  mutate(HOME = TRUE) # Add column to specify these observations are home teams
+
+# Extract away team's data from games data set
+teams_away <- games |>
+  # Select columns corresponding to away team
+  select(SEASON, PTS_away, FG_PCT_away, FG3_PCT_away, FT_PCT_away, AST_away, REB_away,VISITOR_TEAM_ABB,VISITOR_TEAM_NICKNAME,HOME_TEAM_WINS) |>
+    # Rename columns to remove away aspect
+  rename(PTS = "PTS_away",
+         FG_PCT = "FG_PCT_away",
+         FG3_PCT = "FG3_PCT_away",
+         FT_PCT = "FT_PCT_away",
+         AST = "AST_away",
+         REB = "REB_away",
+         ABBREVIATION = "VISITOR_TEAM_ABB",
+         NICKNAME = "VISITOR_TEAM_NICKNAME") |>
+  mutate(HOME = FALSE) # Add column to specify these observations are away teams
+
+teams <- bind_rows(teams_home, teams_away) # Combine away and home team observations into one data set
+```
+
+We are just missing whether a team won the game or not, which we added.
+```{r}
+teams <- teams |>
+  mutate(GAME_WIN = case_when(
+    HOME_TEAM_WINS == 1 & HOME == TRUE ~ TRUE,
+    HOME_TEAM_WINS == 1 & HOME == FALSE ~ FALSE,
+    HOME_TEAM_WINS == 0 & HOME == TRUE ~ FALSE,
+    HOME_TEAM_WINS == 0 & HOME == FALSE ~ TRUE
+  ))
+```
+
+We chose to focus our primary analysis in a ten year period to get an ample sample size. We chose the 10 most recent years before and including 2018 since this was the last season where games were not affected by the COVID-19 pandemic, which affected game attendance by fans.
+```{r}
+games <- games |>
+  filter(SEASON >= 2009, SEASON <= 2018)
+teams <- teams |>
+  filter(SEASON >= 2009, SEASON <= 2018)
+```
+
+Our data sets are now ready for our analysis. 
+```{r}
+games
+teams
+```
+
+
+## Analysis
+
+### Exploratory Data Analysis
+
+Now we can begin to visualize what our data looks like. First we will plot a bar chart of all the games that were won in home court and lost in home court.
+```{r}
+games |>
+  #renaming column values
+  mutate(HOME_TEAM_WINS = case_when(
+    HOME_TEAM_WINS == 1 ~ "Home Win",
+    HOME_TEAM_WINS == 0 ~ "Home Loss"
+  )) |> 
+  ggplot(mapping = aes(
+    x = fct_infreq(as.factor(HOME_TEAM_WINS)), 
+    fill = as.factor(HOME_TEAM_WINS))) +
+  geom_bar(width = 0.65) +
+  scale_fill_discrete(guide="none") + #removing legend 
+  theme_minimal() +
+  #renaming axis and title
+  labs(
+    title = "Distribution of Home Team Win & Home Team Loss",
+    subtitle = "2009 - 2018 seasons",
+    y = "Count"
+  ) +
+  theme(axis.title.x=element_blank()) + #removing x-axis
+  geom_text(aes(label = ..count..), stat = "count", position=position_dodge(width=0.9), vjust=-0.25)
+```
+
+As we can see, in the seasons between 2009 and 2018, out of all 13,796 games that were played, there were 8163 games where the team that played on their home court won. While only 5633 games were lost, where the losers were playing on their home court. About 59.1% of the games won were played on home court.
+
+To see if our findings above were true for all teams in the NBA, we plotted home and away wins for each NBA team.
+```{r fig.height=10, message=FALSE}
+teams |>
+  group_by(NICKNAME, HOME) |>
+  filter(GAME_WIN == TRUE) |>
+  summarise(WINS = n()) |>
+  mutate(HOME = case_when(
+    HOME == "TRUE" ~ "Home",
+    HOME == "FALSE" ~ "Away"
+  )) |>
+  arrange(desc(HOME),WINS) |>
+  ggplot(mapping=aes(y=fct_inorder(NICKNAME), x=WINS, fill=HOME)) + geom_bar(stat="identity",position=position_dodge(width=0.5), width=0.5) + 
+  theme_minimal() + 
+  # rename axis
+  labs(
+    title = "Total Wins in Home and Away Games",
+    subtitle = "2009 - 2018 seasons",
+    x="Wins",
+    y="Team Name",
+    fill="")
+```
+
+Through this chart, we do see that all teams have substantially more wins when they are at home than when they are away.
+
+```{r fig.height=10, message=FALSE}
+teams |>
+  group_by(NICKNAME, HOME) |>
+  summarise(FG_PCT_MEAN = mean(FG_PCT), FG3_PCT_MEAN = mean(FG3_PCT), FT_PCT_MEAN = mean(FT_PCT), PTS_MEAN = mean(PTS)) |>
+  mutate(HOME = case_when(
+    HOME == "TRUE" ~ "Home",
+    HOME == "FALSE" ~ "Away"
+  )) |>
+  arrange(desc(HOME),PTS_MEAN) |>
+  ggplot(mapping=aes(y=fct_inorder(NICKNAME), x=PTS_MEAN, fill=HOME)) + geom_bar(stat="identity",position=position_dodge(width=0.5), width=0.5) + 
+  theme_minimal() + 
+  # rename axis
+  labs(
+    title = "Average Points By Team in Home and Away Games",
+    subtitle = "2009 - 2018 seasons",
+    x="Mean Points",
+    y="Team Name",
+    fill="")
+```
+
+Sorted in descending order of points scored by a team when they are the home team, we have the Golden State Warriors who on average, score more than any other team when they play at home. In contrast, the Chicago Bulls, on average, score the least when they play at home. Additionally, we can notice that each team, on average, scores more when they are the home team than when they are the away team. 
+
+```{r fig.height=10, message=FALSE}
+teams |>
+  group_by(NICKNAME, HOME) |>
+  summarise(FG_PCT_MEAN = mean(FG_PCT), FG3_PCT_MEAN = mean(FG3_PCT), FT_PCT_MEAN = mean(FT_PCT)) |>
+  mutate(HOME = case_when(
+    HOME == "TRUE" ~ "Home",
+    HOME == "FALSE" ~ "Away"
+  )) |>
+  arrange(desc(HOME),FG_PCT_MEAN) |>
+  ggplot(mapping=aes(y=fct_inorder(NICKNAME), x=FG_PCT_MEAN, fill=HOME)) + geom_bar(stat="identity",position=position_dodge(width=0.5), width=0.5) + 
+  theme_minimal() + 
+  # rename axis
+  labs(
+    title = "Average Field Goal Percentage By Team in Home and Away Games",
+    subtitle = "2009 - 2018 seasons",
+    x="Mean Field Goal Percentage",
+    y="Team Name",
+    fill="")
+```
+
+Here, we can see the field goal percentage of a team for when they play at home and when they play as the away team. Similarly to the graph depicting the average points scored by each team, we can see that nearly all teams have a higher field goal percentage when they play at home. The only other team to have a field goal percentage higher as the away team is the Chicago Bulls.
+
+```{r fig.height=10, message=FALSE}
+teams |>
+  group_by(NICKNAME, HOME) |>
+  summarise(FG_PCT_MEAN = mean(FG_PCT), FG3_PCT_MEAN = mean(FG3_PCT), FT_PCT_MEAN = mean(FT_PCT)) |>
+  mutate(HOME = case_when(
+    HOME == "TRUE" ~ "Home",
+    HOME == "FALSE" ~ "Away"
+  )) |>
+  arrange(desc(HOME),FG3_PCT_MEAN) |>
+  ggplot(mapping=aes(y=fct_inorder(NICKNAME), x=FG3_PCT_MEAN, fill=HOME)) + geom_bar(stat="identity",position=position_dodge(width=0.5), width=0.5) +
+  theme_minimal() +
+  # rename axis
+  labs(
+    title = "Average 3-Point Percentage By Team in Home and Away Games",
+    subtitle = "2009 - 2018 seasons",
+    x="Mean 3-Point Percentage",
+    y="Team Name",
+    fill="")
+```
+
+Next, we will take a look at each team's 3-point percentages between their home games and their away games. Just like our other graphs, we can see that many teams have a higher 3-point scoring percentage when they are the home team. The only teams to have a higher 3-point scoring percentage as the away team are the Houston Rockets, Los Angeles Clippers, Boston Celtics, Memphis Grizzlies, and Los Angeles Lakers. 
+
+```{r fig.height=10, message=FALSE}
+teams |>
+  group_by(NICKNAME, HOME) |>
+  summarise(FG_PCT_MEAN = mean(FG_PCT), FG3_PCT_MEAN = mean(FG3_PCT), FT_PCT_MEAN = mean(FT_PCT)) |>
+  mutate(HOME = case_when(
+    HOME == "TRUE" ~ "Home",
+    HOME == "FALSE" ~ "Away"
+  )) |>
+  arrange(desc(HOME),FT_PCT_MEAN) |>
+  ggplot(mapping=aes(y=fct_inorder(NICKNAME), x=FT_PCT_MEAN, fill=HOME)) + geom_bar(stat="identity",position=position_dodge(width=0.5), width=0.5) + 
+  theme_minimal() + 
+  # rename axis
+  labs(
+    title = "Average Free Throw Percentage By Team in Home and Away Games",
+    subtitle = "2009 - 2018 seasons",
+    x="Mean Free Throw Percentage",
+    y="Team Name",
+    fill="")
+```
+
+Finally, we will take a look at each team's free throw percentages when they play as the home team and when they play as the away team. While this graph continues to show the trend of teams shooting better as the home team, we can also see how many more teams have a higher free throw percentage as the away team. There are a total of eight teams who have a higher free throw percentage as the away team, which make up almost 1/3 of the league!
+
+Now that we have seen the individual percentages and points for each team individually, we will continue to visualize the average among all teams overall on the differences between home court and away scoring. We will begin with a boxplots of the points.
+```{r}
+teams |>
+  mutate(HOME = case_when(
+    HOME == TRUE ~ "Home",
+    HOME == FALSE ~ "Away"
+  )) |>
+  ggplot(aes(
+    x = fct_infreq(as.factor(HOME)),
+    y = PTS,
+    fill = HOME
+  )) +
+  theme_minimal() +
+  scale_fill_discrete(guide="none") +
+  geom_boxplot() +
+  theme(axis.title.x=element_blank()) +
+  labs(
+    title = "Points for Home and Away Games",
+    subtitle = "2009 - 2018 seasons",
+    y = "Points"
+  )
+```
+
+On average, we can see that teams score slightly more on when they are playing on their home court. Teams that play away, score about 100 points on average. Meanwhile, teams at their home court score about 105 points.
+
+To continue our analysis, we will also look at field goal shooting percentages.
+```{r}
+teams |>
+  mutate(HOME = case_when(
+    HOME == TRUE ~ "Home",
+    HOME == FALSE ~ "Away"
+  )) |>
+  ggplot(aes(
+    x = fct_infreq(as.factor(HOME)),
+    y = FG_PCT,
+    fill = HOME
+  )) +
+  theme_minimal() +
+  scale_fill_discrete(guide="none") +
+  geom_boxplot() +
+  theme(axis.title.x=element_blank()) +
+  labs(
+    title = "Field Goal Percentages for Home and Away Games",
+    subtitle = "2009 - 2018 seasons",
+    y = "Field Goal Percentage"
+  )
+```
+
+Similar to the points boxplot plotted earlier, we see that teams that play on their home court on average have a slightly higher field goal percentage, about 47%. Meanwhile, away teams have a field goal percentage of about 45%. Field goals percentage might seem much lower that free throws, however, this makes sense because fields goal shots are almost always contested shots. As a result, the percentages are much lower.
+
+
+Next, we will take a look at 3-point percentages.
+```{r}
+teams |>
+  mutate(HOME = case_when(
+    HOME == TRUE ~ "Home",
+    HOME == FALSE ~ "Away"
+  )) |>
+  ggplot(aes(
+    x = fct_infreq(as.factor(HOME)),
+    y = FG3_PCT,
+    fill = HOME
+  )) +
+  theme_minimal() +
+  scale_fill_discrete(guide="none") +
+  geom_boxplot() +
+  theme(axis.title.x=element_blank()) +
+  labs(
+    title = "3-Point Percentages for Home and Away Games",
+    subtitle = "2009 - 2018 seasons",
+    y = "3-Point Percentage"
+  )
+```
+
+We see that teams that play on home and away on average have the similar 3-point percentages, but home teams have a slightly better percentage. In comparison to field goal and free throw percentages, 3-point percentages are much lower because these shots are contested and they are farther from the basket. Teams playing on their home court on average have a 3-point percentage of about 36%, and teams playing away have a percentage of 35%.
+
+Lastly, we will take a look at the free throw percentages among teams.
+```{r}
+teams |>
+  mutate(HOME = case_when(
+    HOME == TRUE ~ "Home",
+    HOME == FALSE ~ "Away"
+  )) |>
+  ggplot(aes(
+    x = fct_infreq(as.factor(HOME)),
+    y = FT_PCT,
+    fill = HOME
+  )) +
+  theme_minimal() +
+  scale_fill_discrete(guide="none") +
+  geom_boxplot() +
+  theme(axis.title.x=element_blank()) +
+  labs(
+    title = "Free Throw Percentages for Home and Away Games",
+    subtitle = "2009 - 2018 seasons",
+    y = "Free Throw Percentage"
+  )
+```
+
+Free throw percentage differences among teams playing home and away is almost negligible. Both on away and home court, teams have an average of about 77% free throw percentage. This is expected and impressive, since these are professional basketball players, we would expect most of these players to make their uncontested free throws. However, there are outliers that exist.
+
+### Data Analysis
+
+Our exploratory data analysis provides good visual insights on how being the home team can affect offensive aspects of NBA games. We know what to take a mathematical approach in determining if being the home team provides an advantage. We started by fitting a logistic regression, predicting the probability of a team winning a game if they are the home team versus the away team.
+```{r}
+m_win <- logistic_reg() |>
+  set_engine("glm") |>
+  fit(as.factor(GAME_WIN) ~ HOME, data = teams, family = "binomial")
+tidy(m_win)
+glance(m_win)
+```
+From this, we see that the log odds of the home team winning during the 2009-2018 seasons on average is .742 higher than the away team. Thus, the odds are 2.10 times the odds of away teams, or 110% higher for home teams. With a p-value that is virtually zero, we can say that there is a strong relationship between winning a game and being the home team within our data. 
+
+Although winning games is the ultimate goal in NBA games, we wanted to see how different aspects of a team's offense are affected by being the home team. We started with a linear regression predicting a team's point total if they are the home versus the away team.
+```{r}
+m_pts <- linear_reg() |>
+  set_engine("lm") |>
+  fit(PTS ~ HOME, data = teams)
+tidy(m_pts)
+glance(m_pts)
+```
+A team can expect to score 2.83 more points if they are at home versus if they are not. With a p-value of virtually zero, we can reject the null hypothesis that being the home team has no effect how many points a team scores. However, looking at the adjusted R^2 value of 1.25%, we see that being the home team does not explain much of the variance in points.
+
+We fitted a similar linear regression, predicting field goal percentage if they are the home versus the away team.
+```{r}
+m_fg <- linear_reg() |>
+  set_engine("lm") |>
+  fit(FG_PCT ~ HOME, data = teams)
+tidy(m_fg)
+glance(m_fg)
+```
+
+A team can expect a field goal percentage 1.12% higher if they are at home versus if they are not. With a p-value of virtually zero, we can reject the null hypothesis that being the home team has no effect a team's field goal percentage. Again, with an adjusted R^2 value of 1.00%, we see that being the home team does not explain much of the variance in field goal percentage.
+
+We fitted a similar linear regression, predicting 3-point field goal percentage if they are the home versus the away team.
+```{r}
+m_fg3 <- linear_reg() |>
+  set_engine("lm") |>
+  fit(FG3_PCT ~ HOME, data = teams)
+tidy(m_fg3)
+glance(m_fg3)
+```
+Being the home team has a lot smaller effect on 3-point field goal percentage than field goal percentage with only an expected increase of .750% in 3-point field goal percentage team if they are at home versus if they are not. The p-value is still virtually zero so we can reject the null hypothesis that being the home team has no effect a team's 3-point field goal percentage. Nonetheless, with the adjusted R^2 value of .124%, we see that being the home team explains even less of the variance in 3-point field goal percentage than field goal percentage or points. 
+
+Lastly, we fitted a linear regression on the last offensive statistic that our data provides. predicting free throw percentage if they are the home versus the away team.
+```{r}
+m_ft <- linear_reg() |>
+  set_engine("lm") |>
+  fit(FT_PCT ~ HOME, data = teams)
+tidy(m_ft)
+glance(m_ft)
+```
+
+A team can expect a free throw percentage .219% higher if they are at home versus if they are not. With a p-value of 7.68%, we fail to reject the null hypothesis that being the home team has no effect a team's field goal percentage. This model has an adjusted R^2 value of .0113%, meaning virtually none of the free throw percentage's variance is explained by being the home team.
+
+### Discussion
+
+The findings from our exploratory data analysis (EDA) and data analysis are interesting because through our EDA there seems to be almost clear "home court advantage" when looking at wins, points, field goal percentage, and partly 3-point percentage. While in our data analysis, we have very low p-values when predicting all variables by home team except for free throw percentage, but we also have fairly low R^2 values. This implies that there is a strong relationship between being the home team and winning, scoring points, and shooting field goals; however, not a lot of the variance in the data we analyzed can be explained by being the home team. With the nature of the data set, we think it is safe to assume the NBA players and NBA teams are relatively consistent over time, which is why the center 50% of all of our box plots covers a relatively small range of data. Knowing this, we would assume that large deviations from the mean are better explained by other outside factors and not home court advantage, which more likely account for smaller but still very relevant differences. Thus, it makes sense that our R^2 value is fairly low with a strong p-value in most tests.
+
+## Conclusion
+
+Through this case study when analyzing all 30 NBA teams from the 2009-2018 seasons, we found through our analysis that is it likely that "home court advantage" exists. Through our exploratory data analysis (EDA), we can clearly see that all NBA teams perform better when playing at home in regards to wins and points across the 10 year period. All but one team has a higher field goal percentage when playing at home and most teams have a higher 3-point field goal percentage when playing at home. Free throw percentage is affected the least by being the home team. In our data analysis, we were able to confirm our visual findings in EDA with p-values very close to 0 in all tests besides when predicting free throw percentage. Although our data analysis also had low R^2 values, due to the perceived consistency of NBA players, it is likely that large deviations from the mean are better explained by outside factors and small but relevant differences are explained by "home court advantage." Limitations for this case study is it is very unlikely that teams continue with the same players for 1 season let alone 10 seasons, so our analysis is not fully standardized. Similarly, players may feel more "at home" in some cities outside of where their team is located versus others, which could influence their game play as well. For further analysis, it would be interesting to see how fouls and free throw attempts per game are affected by being the home team, as this is another offensive indicator that can be influenced by a home crowd.
