@@ -1,6 +1,6 @@
 # Home Court Advantage Case Study
 
-This analysis is a group project for COGS 108 - Data Science in Practice.
+This analysis is a group project for COGS 137 - Practical Data Science in R.
 
 ## Introduction
 
