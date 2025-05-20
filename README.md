@@ -23,3 +23,6 @@ Does a NBA team playing at home have an advantage?
 ## Data Set
 
 The data we are using is sourced from [Kaggle](https://www.kaggle.com/nathanlauga/nba-games?select=games.csv) where the data is collected from the official NBA stats website by user Nathan Lauga. The data consists of all NBA games ranging from 2004 - Nov. 2021. The two datasets we are using are games.csv and teams.csv. Out of the entire dataset, we are using data between the years 2009 and 2018.
+
+## Final
+Click [here](https://htmlpreview.github.io/?https://github.com/mchang21/Home-Court-Advantage-Case-Study/blob/main/project.html) to view the case study.
